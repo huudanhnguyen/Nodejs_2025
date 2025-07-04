@@ -71,10 +71,9 @@ const login = asyncHandler(async (req, res) => {
 });
 
     const getUserProfile = asyncHandler(async (req, res) => {
-    // Sửa dòng này:
-    const userID = req.user; // Lấy trực tiếp ID vì middleware verifyToken đã gán nó vào đây
-
-    const user = await User.findById(userID).select('-password -refreshToken -role'); // Loại bỏ các trường nhạy cảm
+    console.log("USER INFO FROM TOKEN:", req.user); 
+    const userID = req.user; 
+    const user = await User.findById(userID).select('-password -refreshToken -role'); 
 
     if (!user) {
         return res.status(404).json({
@@ -91,36 +90,31 @@ const login = asyncHandler(async (req, res) => {
 
 // Trong file controllers/user.js
 
-const refreshAccessToken = asyncHandler(async (req, res) => {
-    console.log("COOKIE NHẬN ĐƯỢC TỪ POSTMAN:", req.cookies);
-    const cookies = req.cookies;
-    if (!cookies || !cookies.refreshToken) {
-        throw new Error('No refresh token in cookies');
-    }
+// File: controllers/user.js
 
+const refreshAccessToken = asyncHandler(async (req, res) => {
+    const cookies = req.cookies;
+    if (!cookies?.refreshToken) throw new Error('No refresh token in cookies');
+
+    // Bước 1: Xác thực refreshToken
     jwt.verify(cookies.refreshToken, process.env.JWT_REFRESH_SECRET, async (err, decode) => {
         if (err) {
-            // In ra lỗi thật sự từ thư viện JWT để biết lý do
-            console.error("JWT VERIFY ERROR:", err); 
-            // Bạn có thể trả về lỗi cho client hoặc throw lỗi như cũ
-            return res.status(401).json({
-                success: false,
-                message: "Invalid or expired refresh token."
-            });
+            return res.status(401).json({ success: false, message: "Invalid or expired refresh token." });
         }
-        // ---- KẾT THÚC SỬA ----
+        
+        // ---- BƯỚC CẢI THIỆN: KIỂM TRA USER CÓ TỒN TẠI KHÔNG ----
+        // Dùng ID đã giải mã để tìm user TRƯỚC KHI tạo token mới
+        const user = await User.findById(decode.id);
 
-        // Tìm user trong DB, nhưng bây giờ tìm bằng ID từ token đã giải mã
-        const user = await User.findOne({ _id: decode.id });
         if (!user) {
-            return res.status(401).json({
-                success: false,
-                message: "User not found."
-            });
+            // Nếu không tìm thấy, từ chối tạo token mới và có thể xóa cookie rác
+            res.clearCookie('refreshToken', { httpOnly: true, secure: true });
+            return res.status(401).json({ success: false, message: "User for this token no longer exists." });
         }
-
-        // TẠO ACCESS TOKEN MỚI
-        const newAccessToken = generateToken({ id: user._id, role: user.role });
+        // ---------------------------------------------------------
+        
+        // Nếu user tồn tại, mới tạo accessToken mới
+        const newAccessToken = generateToken(user);
         
         return res.status(200).json({
             success: true,
