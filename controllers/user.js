@@ -2,6 +2,7 @@ const User = require('../models/user');
 const asyncHandler = require('express-async-handler');
 const jwt = require('jsonwebtoken');
 const { generateToken, generateRefreshToken } = require('../middlewares/jwt');
+const crypto = require('crypto'); // For generating secure tokens
 const sendEmail = require('../ultils/sendMail'); // Import hàm gửi email
 const register = asyncHandler(async (req, res) => {
     const {firstname, lastname, email, mobile, password} = req.body
@@ -168,5 +169,41 @@ const forgotPassword = asyncHandler(async (req, res) => {
         return res.status(500).json({ success: false, message: 'Failed to send email. Please try again later.' });
     }
 });
+const resetPassword = asyncHandler(async (req, res) => {
+    // 1. Lấy token từ URL và mật khẩu mới từ body
+    const { password } = req.body;
+    const { token } = req.params;
 
-module.exports = { register, login, getUserProfile, refreshAccessToken, logout, forgotPassword };
+    if (!password || !token) {
+        throw new Error('Missing inputs');
+    }
+
+    // 2. Hash lại token nhận được từ URL để so sánh với token trong DB
+    const passwordResetToken = crypto
+        .createHash('sha256')
+        .update(token)
+        .digest('hex');
+
+    // 3. Tìm user trong DB có token khớp và token chưa hết hạn
+    const user = await User.findOne({
+        passwordResetToken,
+        passwordResetExpires: { $gt: Date.now() } // $gt = greater than (lớn hơn)
+    });
+
+    if (!user) {
+        throw new Error('Invalid reset token or token has expired.');
+    }
+
+    // 4. Nếu tìm thấy user, cập nhật lại mật khẩu
+    user.password = password;
+    user.passwordResetToken = undefined; // Xóa token sau khi sử dụng
+    user.passwordResetExpires = undefined; // Xóa thời gian hết hạn
+    await user.save();
+
+    res.json({
+        success: true,
+        message: 'Password has been reset successfully.'
+    });
+});
+
+module.exports = { register, login, getUserProfile, refreshAccessToken, logout, forgotPassword,resetPassword };

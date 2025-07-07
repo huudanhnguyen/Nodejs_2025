@@ -11,5 +11,6 @@ router.get('/profile',verifyToken, ctrls.getUserProfile);
 router.post('/refreshtoken', ctrls.refreshAccessToken);
 router.get('/logout', ctrls.logout);
 router.get('/forgot-password', ctrls.forgotPassword);
+router.put('/reset-password/:token', ctrls.resetPassword);
 
 module.exports = router;
