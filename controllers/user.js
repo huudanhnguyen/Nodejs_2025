@@ -2,6 +2,7 @@ const User = require('../models/user');
 const asyncHandler = require('express-async-handler');
 const jwt = require('jsonwebtoken');
 const { generateToken, generateRefreshToken } = require('../middlewares/jwt');
+const sendEmail = require('../ultils/sendMail'); // Import hàm gửi email
 const register = asyncHandler(async (req, res) => {
     const {firstname, lastname, email, mobile, password} = req.body
     if (!firstname || !lastname || !email || !mobile || !password) {
@@ -88,10 +89,6 @@ const login = asyncHandler(async (req, res) => {
     });
 });
 
-// Trong file controllers/user.js
-
-// File: controllers/user.js
-
 const refreshAccessToken = asyncHandler(async (req, res) => {
     const cookies = req.cookies;
     if (!cookies?.refreshToken) throw new Error('No refresh token in cookies');
@@ -122,5 +119,54 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
         });
     });
 });
+const logout = asyncHandler(async (req, res) => {
+    const cookies = req.cookies;
+    if (!cookies?.refreshToken) {
+        return res.status(204).json({ success: true, message: 'No refresh token in cookies' });
+    }
+    
+    // Xóa refresh token khỏi cookie
+    res.clearCookie('refreshToken', { httpOnly: true, secure: true });
+    
+    // Cập nhật user để xóa refresh token trong cơ sở dữ liệu
+    await User.findOneAndUpdate({ refreshToken: cookies.refreshToken }, { refreshToken: null });
+    
+    return res.status(200).json({ success: true, message: 'Logout successful' });
+});
+const forgotPassword = asyncHandler(async (req, res) => {
+    const { email } = req.query;
+    if (!email) {
+        return res.status(400).json({ success: false, message: 'Email is required' });
+    }
+    // 2. Tìm người dùng trong database
+    const user = await User.findOne({ email });
+    if (!user) {
+        return res.status(200).json({ 
+            success: true, 
+            message: 'If an account with this email exists, a password reset link has been sent.' 
+        });
+    }
+    // 3. Tạo reset token và lưu vào user
+    const resetToken = user.createPasswordResetToken();
+    // Tạm thời lưu lại nhưng chưa commit hẳn, phòng trường hợp gửi mail lỗi
+    await user.save({ validateBeforeSave: false });
+    const html = `<p>Click <a href='${process.env.CLIENT_URL}/api/user/reset-password/${resetToken}'>here</a> to reset your password. This link will expire in 10 minutes.</p>`;
+    // Chuẩn bị dữ liệu theo cấu trúc đã cải thiện ở file sendMail.js
+    const data = {
+        email, // Thay vì to: email
+        html,
+        subject: 'Password Reset Request'
+    };
+    // 5. Gửi email và xử lý kết quả
+    const emailSent = await sendEmail(data);
+    if (emailSent) {
+        return res.status(200).json({ success: true, message: 'Password reset link sent to your email' });
+    } else {
+        user.passwordResetToken = undefined;
+        user.passwordResetExpires = undefined;
+        await user.save({ validateBeforeSave: false });
+        return res.status(500).json({ success: false, message: 'Failed to send email. Please try again later.' });
+    }
+});
 
-module.exports = { register, login, getUserProfile, refreshAccessToken };
+module.exports = { register, login, getUserProfile, refreshAccessToken, logout, forgotPassword };

@@ -1,5 +1,6 @@
 const mongoose = require('mongoose'); // Erase if already required
 const bcrypt = require('bcrypt'); // For hashing passwords
+const crypto = require('crypto'); // For generating secure tokens
 // Declare the Schema of the Mongo model
 var userSchema = new mongoose.Schema({
     firstname:{
@@ -75,7 +76,27 @@ userSchema.pre('save', async function (next) {
 });
 userSchema.methods.comparePassword = async function (candidatePassword) {
     // Compare the candidate password with the hashed password
-    return await bcrypt.compare(candidatePassword, this.password);
+    return await bcrypt.compare(candidatePassword, this.password)
+};
+userSchema.methods.createPasswordResetToken = function() {
+    // 1. Tạo một token ngẫu nhiên
+    const resetToken = crypto.randomBytes(32).toString('hex');
+
+    // 2. Hash token và lưu vào trường passwordResetToken trong DB
+    // Chúng ta chỉ lưu bản hash vào DB để bảo mật
+    this.passwordResetToken = crypto
+        .createHash('sha256')
+        .update(resetToken)
+        .digest('hex');
+
+    // 3. Đặt thời gian hết hạn cho token (ví dụ: 10 phút)
+    this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 phút * 60 giây * 1000ms
+
+    console.log({ resetToken }, this.passwordResetToken); // Dùng để debug
+
+    // 4. Trả về token gốc (chưa được hash)
+    // Token này sẽ được gửi cho người dùng qua email
+    return resetToken;
 };
 
 //Export the model
