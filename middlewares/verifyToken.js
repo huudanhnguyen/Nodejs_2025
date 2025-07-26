@@ -1,37 +1,43 @@
+// file: middlewares/verifyToken.js (hoặc đổi tên thành authHandler.js)
+
+const User = require('../models/user.js');
 const jwt = require('jsonwebtoken');
 const asyncHandler = require('express-async-handler');
 
-// File: middlewares/verifyToken.js
-
+// Middleware 1: Chỉ xác thực token và lấy user
 const verifyToken = asyncHandler(async (req, res, next) => {
     let token;
-    const authHeader = req.headers.authorization;
-
-    // Chỉ xử lý nếu header tồn tại và đúng định dạng
-    if (authHeader && authHeader.startsWith('Bearer ')) {
+    if (req?.headers?.authorization?.startsWith('Bearer')) {
+        token = req.headers.authorization.split(' ')[1];
         try {
-            // Lấy token từ header
-            token = authHeader.split(' ')[1];
-
-            // Xác thực token
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            req.user = decoded.id; // Gắn user vào request
-            return next(); // Cho phép đi tiếp
+            if (token) {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                const user = await User.findById(decoded.id);
+                req.user = user;
+                next();
+            }
         } catch (error) {
-            // Token không hợp lệ (hết hạn, sai chữ ký, ...)
-            return res.status(401).json({
-                success: false,
-                message: 'Not authorized, token failed'
-            });
+            // Nếu token sai hoặc hết hạn, báo lỗi 401
+            res.status(401);
+            throw new Error('Not Authorized, token expired or invalid');
         }
+    } else {
+        res.status(401);
+        throw new Error('There is no token attached to header');
     }
-
-    // Nếu không có token nào được cung cấp trong header
-    return res.status(401).json({
-        success: false,
-        message: 'Not authorized, no token provided'
-    });
 });
 
-module.exports = { verifyToken };
-//
+// Middleware 2: Chỉ kiểm tra quyền admin
+const isAdmin = asyncHandler(async (req, res, next) => {
+    // req.user đã được gán từ middleware 'authMiddleware' chạy trước đó
+    const { role } = req.user;
+    if (role !== 'admin') {
+        // Dòng 41 của bạn nằm ở đây. Giờ chúng ta sẽ xử lý nó đúng cách
+        res.status(401); // Đặt status code là 401
+        throw new Error('Not authorized as an admin'); // Throw lỗi, errorHandler sẽ bắt
+    } else {
+        next();
+    }
+});
+
+module.exports = { verifyToken, isAdmin };

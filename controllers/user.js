@@ -61,6 +61,7 @@ const login = asyncHandler(async (req, res) => {
                 email: user.email,
                 mobile: user.mobile,
                 token: token,
+                role: user.role // Include role if needed
             }
         });
     } else {
@@ -205,5 +206,99 @@ const resetPassword = asyncHandler(async (req, res) => {
         message: 'Password has been reset successfully.'
     });
 });
+const getUsers = asyncHandler(async (req, res) => {
+    const users = await User.find().select('-password -refreshToken -role');
+    if (!users) {
+        return res.status(404).json({
+            success: false,
+            message: 'No users found'
+        });
+    }
+    return res.status(200).json({
+        success: true,
+        users
+    });
+});
+const deleteUser = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    if (!id) {
+        return res.status(400).json({
+            success: false,
+            message: 'User ID is required'
+        });
+    }
+    const user = await User.findByIdAndDelete(id);
+    if (!user) {
+        return res.status(404).json({
+            success: false,
+            message: 'User not found'
+        });
+    }
+    return res.status(200).json({
+        success: true,
+        message: 'User deleted successfully'
+    });
+});
+const updateUser = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { firstname, lastname, email, mobile } = req.body;
 
-module.exports = { register, login, getUserProfile, refreshAccessToken, logout, forgotPassword,resetPassword };
+    if (!id || !firstname || !lastname || !email || !mobile) {
+        return res.status(400).json({
+            success: false,
+            message: 'All fields are required'
+        });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+        id,
+        { firstname, lastname, email, mobile },
+        { new: true, runValidators: true }
+    );
+
+    if (!updatedUser) {
+        return res.status(404).json({
+            success: false,
+            message: 'User not found'
+        }); 
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: 'User updated successfully',
+        user: updatedUser
+    });
+});
+const updateUserbyAdmin = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { firstname, lastname, email, mobile, role } = req.body;
+
+    if (!id || !firstname || !lastname || !email || !mobile || !role) {
+        return res.status(400).json({
+            success: false,
+            message: 'All fields are required'
+        });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+        id,
+        { firstname, lastname, email, mobile, role },
+        { new: true, runValidators: true }
+    );
+
+    if (!updatedUser) {
+        return res.status(404).json({
+            success: false,
+            message: 'User not found'
+        });
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: 'User updated successfully',
+        user: updatedUser
+    });
+});
+
+module.exports = { register, login, getUserProfile, refreshAccessToken, logout,
+                forgotPassword,resetPassword, getUsers, deleteUser, updateUser, updateUserbyAdmin };
