@@ -8,5 +8,6 @@ router.get('/',[verifyToken, isAdmin], ctrls.getAllProducts);
 router.get('/:id',[verifyToken, isAdmin], ctrls.getProduct);
 router.put('/:id',[verifyToken, isAdmin], ctrls.updateProduct);
 router.delete('/:id',[verifyToken, isAdmin], ctrls.deleteProduct);
+router.post('/ratings', [verifyToken], ctrls.ratings);
 
 module.exports = router;

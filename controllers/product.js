@@ -1,7 +1,8 @@
-const { json } = require('express');
+const { json, response } = require('express');
 const Product = require('../models/product');
 const asyncHandler = require('express-async-handler');
 const slugify = require('slugify');
+const { post } = require('../routes/product');
 
 const createProduct = asyncHandler(async (req, res) => {
     if(Object.keys(req.body).length === 0) {
@@ -58,13 +59,31 @@ const getAllProducts = asyncHandler(async (req, res) => {
     } else {
         queryCommand = queryCommand.sort('-createdAt');
     }
+
+    // field limiting
+    if (req.query.fields) {
+        const fields = req.query.fields.split(',').join(' ');
+        queryCommand = queryCommand.select(fields);
+    } else {
+        queryCommand = queryCommand.select('-__v');
+    }
+
+    // pagination
+    const page = +(req.query.page) || 1;
+    const limit = +(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    queryCommand = queryCommand.skip(skip).limit(limit);
+
+    // execute the query
     const response = await queryCommand.exec();
     const counts = await Product.countDocuments(finalQuery);
     return res.status(200).json({
     success: response.length > 0,
     message: response.length > 0 ? 'Products fetched successfully' : 'No products found',
-    products: response,
     totalCount: counts,
+    currentPage: page,
+    totalPages: Math.ceil(counts / limit),
+    products: response,
     });
 });
 const deleteProduct = asyncHandler(async (req, res) => {
@@ -91,6 +110,57 @@ const updateProduct = asyncHandler(async (req, res) => {
         product: product,
     });
 });
+const ratings = asyncHandler(async (req, res) => {
+    const { _id } = req.user;
+    const { star, comment, productId, postedAt } = req.body;
+    if (!star || !productId) {
+        return res.status(400).json({ status: false, message: 'Missing inputs' });
+    }
+    const product = await Product.findById(productId);
+    if (!product) {
+        return res.status(404).json({ status: false, message: 'Product not found' });
+    }
+    // 3. Kiểm tra xem người dùng đã đánh giá sản phẩm này chưa
+    const alreadyRated = product.ratings.find(
+        (rating) => rating.postedBy && rating.postedBy.equals(_id)
+    );
+    if (alreadyRated) {
+        // --- TRƯỜNG HỢP 1: NGƯỜI DÙNG ĐÃ ĐÁNH GIÁ -> CẬP NHẬT LẠI ---
+        // Tính toán sự chênh lệch điểm star để cập nhật tổng điểm
+        const ratingDifference = star - alreadyRated.star;
+        // Dùng `updateOne` với `arrayFilters` để cập nhật chính xác phần tử trong mảng
+        await Product.updateOne(
+            { 
+                _id: productId, 
+                "ratings.postedBy": _id 
+            },
+            {
+                // Cập nhật điểm star và comment của đánh giá cũ
+                $set: { "ratings.$.star": star, "ratings.$.comment": comment, "ratings.$.postedAt": new Date() },
+                // Cập nhật lại tổng điểm rating bằng cách cộng thêm phần chênh lệch
+                $inc: { totalRating: ratingDifference }
+            }
+        );
+    } else {
+        // --- TRƯỜNG HỢP 2: NGƯỜI DÙNG ĐÁNH GIÁ LẦN ĐẦU -> THÊM MỚI ---
+        // Dùng `findByIdAndUpdate` để thực hiện các thao tác một cách nguyên tử
+        await Product.findByIdAndUpdate(productId, {
+            // Thêm một đánh giá mới vào mảng ratings
+            $push: { 
+                ratings: { star, comment, postedBy: _id, postedAt: new Date() } 
+            },
+            // Tăng tổng số điểm và tổng số lượt đánh giá
+            $inc: { totalRating: star, totalRatings: 1 }
+        });
+    }
+    // Lấy lại sản phẩm đã được cập nhật để trả về cho client
+    const updatedProduct = await Product.findById(productId);
+    return res.status(200).json({
+        status: true,
+        message: "Rating updated successfully",
+        product: updatedProduct
+    });
+});
 
 module.exports = {
     createProduct,
@@ -98,4 +168,5 @@ module.exports = {
     getAllProducts,
     deleteProduct,
     updateProduct,
+    ratings
 };  
