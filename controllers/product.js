@@ -2,7 +2,6 @@ const { json, response } = require('express');
 const Product = require('../models/product');
 const asyncHandler = require('express-async-handler');
 const slugify = require('slugify');
-const { post } = require('../routes/product');
 
 const createProduct = asyncHandler(async (req, res) => {
     if(Object.keys(req.body).length === 0) {
@@ -155,6 +154,12 @@ const ratings = asyncHandler(async (req, res) => {
     }
     // Lấy lại sản phẩm đã được cập nhật để trả về cho client
     const updatedProduct = await Product.findById(productId);
+    // Tính toán lại tổng điểm rating
+    const ratingsCount = updatedProduct.ratings.length;
+    const sumRatings = updatedProduct.ratings.reduce((sum, rating) => sum + +rating.star, 0);
+    updatedProduct.totalRating = Math.round(sumRatings *10/ratingsCount)/10;
+    await updatedProduct.save();
+    // Trả về phản hồi thành công
     return res.status(200).json({
         status: true,
         message: "Rating updated successfully",
