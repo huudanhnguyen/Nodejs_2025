@@ -166,12 +166,22 @@ const ratings = asyncHandler(async (req, res) => {
         product: updatedProduct
     });
 });
-
+const uploadImageProduct = asyncHandler(async (req, res) => {
+    console.log(req.file);
+    const imagePath = req.file ? req.file.path : null; 
+    
+    return res.status(200).json({
+        success: true,
+        message: 'Image uploaded successfully',
+        image: imagePath
+    });
+});
 module.exports = {
     createProduct,
     getProduct,
     getAllProducts,
     deleteProduct,
     updateProduct,
-    ratings
+    ratings,
+    uploadImageProduct
 };  

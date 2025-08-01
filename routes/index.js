@@ -9,6 +9,8 @@ const initRoutes = (app) => {
     app.use('/api/product-categories', require('./productCategory'));
     app.use('/api/blog-categories', require('./blogCategory'));
     app.use('/api/blog', require('./blog'));
+    app.use('/api/brand', require('./brand'));
+    app.use('/api/coupon', require('./coupon'));
     app.use(notFound);
         // Middleware xử lý lỗi tổng quát (phải đặt cuối cùng)
     app.use(errorHandler); 
