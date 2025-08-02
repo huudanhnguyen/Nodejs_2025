@@ -299,6 +299,5 @@ const updateUserbyAdmin = asyncHandler(async (req, res) => {
         user: updatedUser
     });
 });
-
 module.exports = { register, login, getUserProfile, refreshAccessToken, logout,
                 forgotPassword,resetPassword, getUsers, deleteUser, updateUser, updateUserbyAdmin };

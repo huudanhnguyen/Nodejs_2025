@@ -12,6 +12,7 @@ router.get('/logout', ctrls.logout);
 router.get('/forgot-password', ctrls.forgotPassword);
 router.put('/reset-password/:token', ctrls.resetPassword);
 router.use(verifyToken); // Apply verifyToken middleware to all routes below this point
+
 // Get all users route (admin only)
 router.get('/', [verifyToken, isAdmin], ctrls.getUsers);
 router.delete('/:id', [isAdmin], ctrls.deleteUser);

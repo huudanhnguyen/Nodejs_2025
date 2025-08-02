@@ -11,6 +11,7 @@ const initRoutes = (app) => {
     app.use('/api/blog', require('./blog'));
     app.use('/api/brand', require('./brand'));
     app.use('/api/coupon', require('./coupon'));
+    app.use('/api/address', require('./address'));
     app.use(notFound);
         // Middleware xử lý lỗi tổng quát (phải đặt cuối cùng)
     app.use(errorHandler); 
