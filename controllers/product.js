@@ -1,31 +1,88 @@
-const { json, response } = require('express');
 const Product = require('../models/product');
+const ProductCategory = require('../models/productCategory');
 const asyncHandler = require('express-async-handler');
+const cloudinary = require('cloudinary').v2;
 const slugify = require('slugify');
 
 const createProduct = asyncHandler(async (req, res) => {
-    if(Object.keys(req.body).length === 0) {
-        return res.status(400).json({ message: 'No data provided' });
+    try {
+        // Lấy dữ liệu từ req.body
+        const { title, price, description, brand, category, color } = req.body;
+        if (!title || !price || !description || !brand || !category) {
+            throw new Error('All required fields must be provided');
+        }
+        // Xác thực Category
+        // Người dùng sẽ gửi lên tên của category (ví dụ: "Điện thoại")
+        // Chúng ta cần tìm document category tương ứng trong database.
+        const foundCategory = await ProductCategory.findOne({ title: category });
+        // Nếu không tìm thấy category, ném lỗi -> khối catch sẽ dọn dẹp ảnh
+        if (!foundCategory) {
+            throw new Error(`Category '${category}' not found. Please create it first or use a valid category name.`);
+        }
+        // Kiểm tra xem có file ảnh được upload không
+        if (!req.files || req.files.length === 0) {
+            throw new Error('Product images are required');
+        }
+        // Xử lý mảng req.files để lấy thông tin ảnh
+        const imagesData = req.files.map((file) => ({
+            url: file.path,
+            public_id: file.filename,
+        }));
+        const newProductData = {
+            title,
+            price,
+            description,
+            brand,
+            color,
+            slug: slugify(title, { lower: true }),
+            images: imagesData,
+            // [NEW] Gán _id của category đã tìm thấy vào sản phẩm
+            category: foundCategory._id,
+        };
+
+        const newProduct = new Product(newProductData);
+        const createdProduct = await newProduct.save();
+
+        return res.status(201).json({
+            success: true,
+            message: 'Product created successfully',
+            createdProduct,
+        });
+
+    } catch (error) {
+        // Khối catch để dọn dẹp ảnh vẫn hoạt động hoàn hảo
+        if (req.files && req.files.length > 0) {
+            console.log("An application error occurred. Cleaning up uploaded files...");
+            const publicIds = req.files.map((file) => file.filename);
+            try {
+                await cloudinary.api.delete_resources(publicIds);
+                console.log("Cleanup successful.");
+            } catch (cleanupError) {
+                console.error("CRITICAL: Failed to clean up uploaded files.", cleanupError);
+            }
+        }
+        
+        if (error.message.includes('required') || error.message.includes('not found')) {
+            return res.status(400).json({ success: false, message: error.message });
+        }
+        
+        throw error;
     }
-    if (req.body && req.body.title) {
-        req.body.slug = slugify(req.body.title,{ lower: true });
-    }
-    const newProduct = await Product.create(req.body);
-    return res.status(200).json({
-        success: newProduct ? true : false,
-        message: newProduct ? 'Product created successfully' : 'Failed to create product',
-        newProduct: newProduct,
-    });
 });
 const getProduct = asyncHandler(async (req, res) => {
-    const product = await Product.findById(req.params.id);
+    const { pid } = req.params;
+    console.log(`--- Searching for Product ID: "${pid}" ---`);
+    const product = await Product.findById(pid).populate('category' , 'title _id');
+
     if (!product) {
-        return res.status(404).json({ message: 'Product not found' });
+        return res.status(404).json({
+            success: false,
+            message: 'Product not found',
+        });
     }
     return res.status(200).json({
         success: true,
-        message: 'Product fetched successfully',
-        product: product,
+        productData: product,
     });
 });
 const getAllProducts = asyncHandler(async (req, res) => {
@@ -50,7 +107,7 @@ const getAllProducts = asyncHandler(async (req, res) => {
     }
     if (queries.title) {finalQuery.title = { $regex: queries.title, $options: 'i' };}
     if (queries.brand) {finalQuery.brand = { $regex: queries.brand, $options: 'i' };}
-    let queryCommand = Product.find(finalQuery);
+    let queryCommand = Product.find(finalQuery).populate('category', 'title _id');
     //sorting
     if (req.query.sort) {
         const sortBy = req.query.sort.split(',').join(' ');
@@ -96,22 +153,62 @@ const deleteProduct = asyncHandler(async (req, res) => {
     });
 });
 const updateProduct = asyncHandler(async (req, res) => {
-    const product = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    if (!product) {
-        return res.status(404).json({ message: 'Product not found' });
+    const { pid } = req.params;
+    try {
+        if (req.body.category) {
+            const foundCategory = await ProductCategory.findOne({ title: req.body.category });
+            if (!foundCategory) throw new Error(`Product Category '${req.body.category}' not found.`);
+            req.body.category = foundCategory._id;
+        }
+        if (req.body.title) {
+            req.body.slug = slugify(req.body.title, { lower: true });
+        }
+
+        const product = await Product.findById(pid);
+        if (!product) {
+            if (req.files) {
+                const publicIds = req.files.map(file => file.filename);
+                await cloudinary.api.delete_resources(publicIds);
+            }
+            return res.status(404).json({ message: 'Product not found' });
+        }
+
+        if (req.files && req.files.length > 0) {
+            if (product.images && product.images.length > 0) {
+                const oldImagePublicIds = product.images.map(img => img.public_id);
+                await cloudinary.api.delete_resources(oldImagePublicIds);
+            }
+            req.body.images = req.files.map(file => ({
+                url: file.path,
+                public_id: file.filename
+            }));
+        }
+
+        Object.assign(product, req.body);
+        const updatedProduct = await product.save();
+        await updatedProduct.populate('category', 'title _id');
+
+        return res.status(200).json({
+            success: true,
+            message: 'Product updated successfully',
+            updatedProduct,
+        });
+    } catch (error) {
+        if (req.files && req.files.length > 0) {
+            console.log("An error occurred during product update. Cleaning up uploaded files...");
+            const publicIds = req.files.map((file) => file.filename);
+            await cloudinary.api.delete_resources(publicIds);
+            console.log("Cleanup successful.");
+        }
+        if (error.message.includes('not found')) {
+            return res.status(400).json({ success: false, message: error.message });
+        }
+        throw error;
     }
-    if (req.body && req.body.title) {
-        product.slug = slugify(req.body.title, { lower: true });
-    }
-    return res.status(200).json({
-        success: true,
-        message: 'Product updated successfully',
-        product: product,
-    });
 });
 const ratings = asyncHandler(async (req, res) => {
     const { _id } = req.user;
-    const { star, comment, productId, postedAt } = req.body;
+    const { star, comment, productId, postedBy } = req.body;
     if (!star || !productId) {
         return res.status(400).json({ status: false, message: 'Missing inputs' });
     }
@@ -167,13 +264,29 @@ const ratings = asyncHandler(async (req, res) => {
     });
 });
 const uploadImageProduct = asyncHandler(async (req, res) => {
-    console.log(req.file);
-    const imagePath = req.file ? req.file.path : null; 
-    
+    const { pid } = req.params;
+    if (!req.files || req.files.length === 0) {
+        throw new Error('No files uploaded');
+    }
+    const product = await Product.findById(pid);
+    if (!product) {
+        throw new Error('Product not found');
+    }
+    const newImages = req.files.map(file => ({
+        url: file.path,
+        public_id: file.filename
+    }));
+    // 5. Thêm các ảnh mới vào mảng images của sản phẩm
+    //    Sử dụng $push và $each để thêm nhiều ảnh cùng lúc
+    const updatedProduct = await Product.findByIdAndUpdate(
+        pid,
+        { $push: { images: { $each: newImages } } },
+        { new: true } // Trả về document đã được cập nhật
+    );
     return res.status(200).json({
         success: true,
-        message: 'Image uploaded successfully',
-        image: imagePath
+        message: 'Images uploaded and updated successfully',
+        data: updatedProduct
     });
 });
 module.exports = {

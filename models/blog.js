@@ -15,9 +15,9 @@ var blogSchema = new mongose.Schema({
         unique: true,
     },
     category: {
-        type: String,
+        type: mongose.Schema.Types.ObjectId,
+        ref: 'BlogCategory',
         required: true,
-        trim: true,
     },
     createdAt: {
         type: Date,
@@ -43,10 +43,12 @@ var blogSchema = new mongose.Schema({
             ref: 'User',
         }
     ],
-    image: {
-        type: String,
-        default: 'https://plus.unsplash.com/premium_photo-1684581214880-2043e5bc8b8b?fm=jpg&q=60&w=3000&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxzZWFyY2h8MXx8YmxvZyUyMGJhY2tncm91bmR8ZW58MHx8MHx8fDA%3D',
-    },
+    images: [
+        {
+            type: Array,
+            default: [],
+        },
+    ],
     author: {
         type: String,
         default: 'Admin',

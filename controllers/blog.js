@@ -1,41 +1,116 @@
 const Blog = require('../models/blog');
 const asyncHandler = require('express-async-handler');
 const slugify = require('slugify');
+const cloudinary = require('cloudinary').v2;
+const BlogCategory = require('../models/blogCategory'); // Import BlogCategory model
 const createBlog = asyncHandler(async (req, res) => {
-    const { title, description, category, image, author } = req.body;
-    if (!title || !description || !category || !author) {
-        res.status(400);
-        throw new Error('All fields are required');
-    }
-    const blog = new Blog({
-        title,
-        description,
-        category,
-        image,
-        author,
-        slug: slugify(title, { lower: true, strict: true }),
-    });
+    try {
+        const { title, description, category, author } = req.body;
+        if (!title || !description || !category || !author) {
+            throw new Error('All required fields must be provided');
+        }
+        const foundCategory = await BlogCategory.findOne({ title: category });
+        if (!foundCategory) {
+            throw new Error(`Blog Category '${category}' not found.`);
+        }
+        if (!req.files || req.files.length === 0) {
+            throw new Error('Blog images are required');
+        }
+        const imagesData = req.files.map((file) => ({
+            url: file.path,
+            public_id: file.filename,
+        }));
+        const newBlogData = {
+            title,
+            description,
+            author, // Giả sử author vẫn là một ObjectId
+            slug: slugify(title, { lower: true }),
+            images: imagesData,
+            category: foundCategory._id, // [NEW] Gán _id của category đã tìm thấy
+        };
+        const newBlog = new Blog(newBlogData);
+         await newBlog.save();
 
-    const createdBlog = await blog.save();
-    res.status(201).json(createdBlog);
+        // [NEW] Populate dữ liệu sau khi đã lưu
+        // Dùng .populate() trên đối tượng newBlog để làm đầy các trường tham chiếu
+        await newBlog.populate('category', 'title _id'); // Chỉ lấy title và _id của category
+        await newBlog.populate('author', 'firstname lastname');
+        const createdBlog = newBlog.toObject(); // Chuyển đổi sang object thuần túy
+        return res.status(201).json({
+            success: true,
+            message: 'Blog created successfully',
+            createdBlog,
+        });
+    } catch (error) {
+        // Khối catch để dọn dẹp ảnh vẫn hoạt động hoàn hảo
+        if (req.files && req.files.length > 0) {
+            console.log("An application error occurred. Cleaning up uploaded files...");
+            const publicIds = req.files.map((file) => file.filename);
+            await cloudinary.api.delete_resources(publicIds);
+        }
+        
+        if (error.message.includes('required') || error.message.includes('not found')) {
+            return res.status(400).json({ success: false, message: error.message });
+        }
+        
+        throw error;
+    }
 });
 const updateBlog = asyncHandler(async (req, res) => {
-    const { title, description,category, author } = req.body;
+    const { bid } = req.params;
+    try {
+        if (req.body.category) {
+            // Tìm category mới bằng tên
+            const foundCategory = await BlogCategory.findOne({ title: req.body.category });
+            if (!foundCategory) {
+                throw new Error(`Blog Category '${req.body.category}' not found.`);
+            }
+            req.body.category = foundCategory._id;
+        }
+        const blog = await Blog.findById(bid);
+        if (!blog) {
+            if (req.files) {
+                const publicIds = req.files.map(file => file.filename);
+                await cloudinary.api.delete_resources(publicIds);
+            }
+            return res.status(404).json({ message: 'Blog not found' });
+        }
+        if (req.body.title) {
+            req.body.slug = slugify(req.body.title, { lower: true });
+        }
+        if (req.files && req.files.length > 0) {
+            if (blog.images && blog.images.length > 0) {
+                const oldImagePublicIds = blog.images.map(img => img.public_id);
+                await cloudinary.api.delete_resources(oldImagePublicIds);
+            }
+            req.body.images = req.files.map(file => ({
+                url: file.path,
+                public_id: file.filename
+            }));
+        }
+        Object.assign(blog, req.body);
+        const updatedBlog = await blog.save();
+        await updatedBlog.populate('category', 'name');
+        await updatedBlog.populate('author', 'firstname lastname');
+        return res.status(200).json({
+            success: true,
+            message: 'Blog updated successfully',
+            updatedBlog,
+        });
 
-    const blog = await Blog.findById(req.params.id);
-    if (!blog) {
-        res.status(404);
-        throw new Error('Blog not found');
+    } catch (error) {
+        if (req.files && req.files.length > 0) {
+            console.log("An error occurred during blog update. Cleaning up uploaded files...");
+            const publicIds = req.files.map((file) => file.filename);
+            await cloudinary.api.delete_resources(publicIds);
+        }
+
+        if (error.message.includes('not found')) {
+            return res.status(400).json({ success: false, message: error.message });
+        }
+
+        throw error;
     }
-
-    blog.title = title || blog.title;
-    blog.description = description || blog.description;
-    blog.category = category || blog.category;
-    blog.slug = slugify(title, { lower: true, strict: true });
-    blog.author = author || blog.author;
-
-    const updatedBlog = await blog.save();
-    res.status(200).json(updatedBlog);
 });
 const deleteBlog = asyncHandler(async (req, res) => {
     const blog = await Blog.findByIdAndDelete(req.params.id);
@@ -163,8 +238,35 @@ const getBlogs = asyncHandler(async (req, res) => {
     const blogs = await Blog.find({})
         .populate('likes', 'lastName firstName email')
         .populate('dislikes', 'lastName firstName email')
-        .populate('author', 'firstName lastName');
+        .populate('author', 'firstName lastName')
+        .populate('category', 'title _id') // Chỉ lấy title và _id của category
     res.status(200).json(blogs);
+});
+const uploadImageBlog = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    if (!req.files || req.files.length === 0) {
+        throw new Error('No files uploaded');
+    }
+    const blog = await Blog.findById(id);
+    if (!blog) {
+        throw new Error('Blog not found');
+    }
+    const newImages = req.files.map(file => ({
+        url: file.path,
+        public_id: file.filename
+    }));
+    // 5. Thêm các ảnh mới vào mảng images của sản phẩm
+    //    Sử dụng $push và $each để thêm nhiều ảnh cùng lúc
+    const updatedBlog = await Blog.findByIdAndUpdate(
+        id,
+        { $push: { images: { $each: newImages } } },
+        { new: true } // Trả về document đã được cập nhật
+    );
+    return res.status(200).json({
+        success: true,
+        message: 'Images uploaded and updated successfully',
+        data: updatedBlog
+    });
 });
 module.exports = {
     createBlog,
@@ -173,5 +275,6 @@ module.exports = {
     updateBlog,
     deleteBlog,
     likeBlog,
-    dislikeBlog
+    dislikeBlog,
+    uploadImageBlog
 };
