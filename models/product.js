@@ -82,8 +82,25 @@ const productSchema = new mongoose.Schema({
         type: Number,
         default: 0,
     },
+    countInStock: {
+        type: Number,
+        default: 0,
+    },
 }, {
     timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+});
+
+productSchema.virtual('formattedPrice').get(function() {
+    if (this.price == null) {
+        return '';
+    }
+    // Sử dụng toLocaleString, một cách nhanh hơn của Intl.NumberFormat
+    return this.price.toLocaleString('vi-VN', {
+        style: 'currency',
+        currency: 'VND'
+    });
 });
 
 module.exports = mongoose.model('Product', productSchema);

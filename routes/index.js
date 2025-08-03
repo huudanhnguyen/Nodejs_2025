@@ -13,6 +13,7 @@ const initRoutes = (app) => {
     app.use('/api/coupon', require('./coupon'));
     app.use('/api/address', require('./address'));
     app.use('/api/order', require('./order'));
+    app.use('/api/cart', require('./cart'));
     app.use(notFound);
         // Middleware xử lý lỗi tổng quát (phải đặt cuối cùng)
     app.use(errorHandler); 
