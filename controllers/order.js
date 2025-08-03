@@ -1,95 +1,204 @@
-const Order = require('../models/order');
-const User = require('../models/user');
-const Coupon = require('../models/coupon');
 const asyncHandler = require('express-async-handler');
+const Order = require('../models/order');
+const Product = require('../models/product');
 
-// Hàm tạo đơn hàng mới
-const createOrder = asyncHandler(async (req, res) => {
-    const { _id } = req.user; // Lấy id của người dùng đang đăng nhập (từ middleware)
-    const { coupon } = req.body; // Lấy mã coupon nếu người dùng áp dụng
+const orderController = {
+    /**
+     * @description Tạo một đơn hàng mới, cập nhật tồn kho
+     * @route POST /api/orders
+     * @access Private
+     */
+    createOrder: asyncHandler(async (req, res) => {
+        // userId nên được lấy từ middleware xác thực
+        // const userId = req.user.id;
+        const { userId, orderItems, shippingAddress } = req.body; // orderItems: [{ productId, quantity }]
 
-    // Tìm giỏ hàng của người dùng
-    const userCart = await User.findById(_id).select('cart').populate('cart.product', 'title price');
-    if (!userCart || userCart.cart.length === 0) {
-        return res.status(400).json({
-            success: false,
-            message: 'Giỏ hàng của bạn đang trống'
-        });
-    }
-
-    // Tính tổng tiền từ các sản phẩm trong giỏ hàng
-    const products = userCart.cart.map(item => ({
-        product: item.product._id,
-        quantity: item.quantity,
-        color: item.color,
-        price: item.product.price // Lấy giá từ sản phẩm được populate
-    }));
-    let total = userCart.cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
-
-    // Xử lý mã giảm giá (nếu có)
-    const createData = { products, total, orderBy: _id };
-    if (coupon) {
-        const selectedCoupon = await Coupon.findById(coupon);
-        if (selectedCoupon) {
-            total = Math.round(total * (1 - selectedCoupon.discountValue / 100) / 1000) * 1000;
-            createData.total = total;
-            createData.coupon = coupon;
+        if (!orderItems || orderItems.length === 0) {
+            res.status(400);
+            throw new Error('Không có sản phẩm nào trong giỏ hàng.');
         }
-    }
+        
+        // 1. Lấy thông tin đầy đủ của các sản phẩm từ DB
+        const productIds = orderItems.map(item => item.productId);
+        const productsFromDB = await Product.find({ _id: { $in: productIds } });
 
-    // Tạo đơn hàng mới
-    const newOrder = await Order.create(createData);
+        if (productsFromDB.length !== productIds.length) {
+            res.status(404);
+            throw new Error('Một hoặc nhiều sản phẩm không được tìm thấy.');
+        }
 
-    // Sau khi tạo đơn hàng thành công, xóa giỏ hàng của người dùng
-    if (newOrder) {
-        await User.findByIdAndUpdate(_id, { cart: [] });
-    }
+        let totalAmount = 0;
+        // 2. Tạo mảng products cho order và tính tổng tiền
+        const productsForOrder = orderItems.map(item => {
+            const product = productsFromDB.find(p => p._id.toString() === item.productId);
 
-    res.status(201).json({
-        success: newOrder ? true : false,
-        order: newOrder ? newOrder : 'Không thể tạo đơn hàng'
-    });
-});
+            // Kiểm tra tồn kho
+            if (product.countInStock < item.quantity) {
+                res.status(400);
+                throw new Error(`Sản phẩm "${product.name}" không đủ hàng.`);
+            }
 
-// Hàm cập nhật trạng thái đơn hàng (cho Admin)
-const updateStatus = asyncHandler(async (req, res) => {
-    const { oid } = req.params; // Lấy id của đơn hàng từ URL
-    const { status } = req.body; // Lấy trạng thái mới từ body
+            totalAmount += product.price * item.quantity;
 
-    if (!status) throw new Error('Trạng thái không được để trống');
+            return {
+                productId: item.productId,
+                quantity: item.quantity,
+                price: product.price, // Lấy giá từ DB, không phải từ client
+                name: product.name, // Lưu tên sản phẩm để hiển thị
+                imageUrl: product.imageUrl // Lưu URL hình ảnh để hiển thị
+                
+            };
+        });
 
-    const updatedOrder = await Order.findByIdAndUpdate(oid, { status }, { new: true });
+        // 3. Tạo đơn hàng mới
+        const newOrder = new Order({
+            userId,
+            products: productsForOrder,
+            totalAmount,
+            shippingAddress,
+            status: 'pending', // Trạng thái mặc định
+        });
 
-    res.json({
-        success: updatedOrder ? true : false,
-        order: updatedOrder ? updatedOrder : 'Không tìm thấy đơn hàng'
-    });
-});
+        const savedOrder = await newOrder.save();
+        
+        // 4. Cập nhật số lượng tồn kho cho từng sản phẩm
+        for (const item of savedOrder.products) {
+            await Product.findByIdAndUpdate(item.productId, {
+                $inc: { countInStock: -item.quantity } // Dùng $inc để trừ đi số lượng
+            });
+        }
 
-// Hàm lấy đơn hàng của người dùng hiện tại
-const getUserOrder = asyncHandler(async (req, res) => {
-    const { _id } = req.user;
-    const orders = await Order.find({ orderBy: _id }).populate('products.product', 'title');
+        res.status(201).json({
+            message: 'Tạo đơn hàng thành công!',
+            order: savedOrder,
+        });
+    }),
 
-    res.json({
-        success: orders ? true : false,
-        orders: orders ? orders : 'Không tìm thấy đơn hàng nào'
-    });
-});
+    /**
+     * @description Lấy tất cả đơn hàng (sử dụng populate)
+     * @route GET /api/orders
+     * @access Private
+     */
+    getAllOrders: asyncHandler(async (req, res) => {
+        const { userId } = req.query;
+        let filter = {};
+        if (userId) filter.userId = userId;
 
-// Hàm lấy tất cả đơn hàng (cho Admin)
-const getOrders = asyncHandler(async (req, res) => {
-    const orders = await Order.find().populate('products.product', 'title').populate('orderBy', 'firstname lastname');
+        const orders = await Order.find(filter)
+            .populate('userId', 'name email') // Populate thông tin người dùng
+            // THÊM DÒNG NÀY: Populate thông tin sản phẩm trong đơn hàng
+            .populate('products.productId', 'title price imageUrl') 
+            .sort({ createdAt: -1 });
 
-    res.json({
-        success: orders ? true : false,
-        orders: orders ? orders : 'Không tìm thấy đơn hàng nào'
-    });
-});
+        res.status(200).json({
+            message: 'Lấy danh sách đơn hàng thành công!',
+            count: orders.length,
+            orders,
+        });
+    }),
 
-module.exports = {
-    createOrder,
-    updateStatus,
-    getUserOrder,
-    getOrders
+    /**
+     * @description Lấy thông tin chi tiết một đơn hàng (sử dụng populate)
+     * @route GET /api/orders/:id
+     * @access Private
+     */
+    getOrderById: asyncHandler(async (req, res) => {
+        const order = await Order.findById(req.params.id)
+            .populate('userId', 'name email') // Populate thông tin người dùng
+            .populate('products.productId', 'title price imageUrl'); // Populate thông tin sản phẩm
+
+        if (!order) {
+            res.status(404);
+            throw new Error('Không tìm thấy đơn hàng.');
+        }
+
+        res.status(200).json({
+            message: 'Lấy thông tin đơn hàng thành công!',
+            order,
+        });
+    }),
+    /**
+     * @description Cập nhật trạng thái đơn hàng
+     * @route PUT /api/orders/:id/status
+     * @access Private (Admin)
+     */
+    updateOrderStatus: asyncHandler(async (req, res) => {
+        const { status } = req.body;
+        if (!status) {
+            res.status(400);
+            throw new Error('Vui lòng cung cấp trạng thái đơn hàng.');
+        }
+
+        const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true });
+
+        if (!order) {
+            res.status(404);
+            throw new Error('Không tìm thấy đơn hàng để cập nhật.');
+        }
+
+        res.status(200).json({
+            message: 'Cập nhật trạng thái đơn hàng thành công!',
+            order,
+        });
+    }),
+    /**
+     * @description Xóa một đơn hàng
+     * @route DELETE /api/orders/:id
+     * @access Private (Admin)
+     */
+    deleteOrder: asyncHandler(async (req, res) => {
+        const order = await Order.findByIdAndDelete(req.params.id);
+
+        if (!order) {
+            res.status(404);
+            throw new Error('Không tìm thấy đơn hàng để xóa.');
+        }
+
+        res.status(200).json({
+            message: 'Xóa đơn hàng thành công!',
+            orderId: req.params.id,
+        });
+    }),
+    /**
+     * @description Lấy đơn hàng của người dùng hiện tại
+     * @route GET /api/orders/my-orders
+     * @access Private
+     */
+    getMyOrders: asyncHandler(async (req, res) => {
+        const userId = req.user.id; // Lấy userId từ middleware xác thực
+
+        const orders = await Order.find({ userId })
+            .populate('products.productId', 'title price imageUrl') // Populate thông tin sản phẩm
+            .sort({ createdAt: -1 });
+
+        res.status(200).json({
+            message: 'Lấy danh sách đơn hàng của bạn thành công!',
+            count: orders.length,
+            orders,
+        });
+    }),
+    getStatusOrder: asyncHandler(async (req, res) => {
+        const { status } = req.query;
+        if (!status) {
+            res.status(400);
+            throw new Error('Vui lòng cung cấp trạng thái đơn hàng.');
+        }
+        const orders = await Order.find({ status })
+            .populate('userId', 'name email') // Populate thông tin người dùng
+            .populate('products.productId', 'title price imageUrl') // Populate thông tin sản phẩm
+            .sort({ createdAt: -1 });
+        if (orders.length === 0) {
+            res.status(404).json({
+                message: 'Không tìm thấy đơn hàng với trạng thái này.',
+            });
+            return;
+        }
+        res.status(200).json({
+            message: `Lấy danh sách đơn hàng với trạng thái "${status}" thành công!`,
+            count: orders.length,
+            orders,
+        });
+    }),
 };
+
+module.exports = orderController;
