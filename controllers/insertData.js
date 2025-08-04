@@ -1,7 +1,10 @@
 const Product = require('../models/product');
-const data = require('../../data/data.js'); // Đảm bảo đường dẫn này đúng
-const asyncHandler = require('express-async-handler');
+const ProductCategory = require('../models/productCategory');
 const slugify = require('slugify');
+const data = require('../../data/data.js'); // Đảm bảo đường dẫn này đúng
+const cateBrandData  = require('../../data/cate-brand.js');
+const asyncHandler = require('express-async-handler');
+
 
 // Hàm fn sẽ nhận vào một 'item' (sản phẩm thực sự) và 'categoryName'
 const fn = asyncHandler(async (item, categoryName) => {
@@ -12,7 +15,6 @@ const fn = asyncHandler(async (item, categoryName) => {
     // Tìm đối tượng variant có label là "Color" và lấy mảng variants bên trong nó
     const colorVariant = item.variants?.find(v => v.label === 'Color');
     const colors = colorVariant ? colorVariant.variants : ['Default Color']; // Nếu không tìm thấy, dùng màu mặc định
-
     // 3. TẠO MÔ TẢ (DESCRIPTION)
     const description = [];
     if (item.description && Array.isArray(item.description)) {
@@ -32,7 +34,6 @@ const fn = asyncHandler(async (item, categoryName) => {
         // Nếu item không có category, dùng categoryName từ đối tượng cha làm dự phòng
         finalCategory = categoryName || 'Uncategorized';
     }
-
     // 4. SỬA LỖI VALIDATION VÀ TẠO SẢN PHẨM
     await Product.create({
         title: item.name,
@@ -50,7 +51,6 @@ const fn = asyncHandler(async (item, categoryName) => {
 
 const insertProduct = asyncHandler(async (req, res) => {
     const promises = [];
-
     // LOGIC ĐÚNG: Dùng vòng lặp lồng nhau
     for (const category of data) {
         // Nếu categoryName rỗng, gán một giá trị mặc định
@@ -60,11 +60,31 @@ const insertProduct = asyncHandler(async (req, res) => {
             promises.push(fn(item, currentCategoryName));
         }
     }
-
     await Promise.all(promises);
     return res.json('Done inserting all products!');
 });
+const insertProductCategory = asyncHandler(async (req, res) => {
+    const promises = [];
+    for (const cate of cateBrandData) {
+        promises.push(ProductCategory.findOneAndUpdate(
+            { title: cate.cate },
+            {
+                $set: {
+                    title: cate.cate,
+                    brand: cate.brand,
+                    // THÊM DÒNG NÀY ĐỂ SỬA LỖI
+                    // slug: slugify(cate.cate, { lower: true })
+                }
+            },
+            { upsert: true }
+        ));
+    }
+
+    await Promise.all(promises);
+    return res.json('Product categories have been created or updated!');
+});
 
 module.exports = {
-    insertProduct
+    insertProduct,
+    insertProductCategory
 };
